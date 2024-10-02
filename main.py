@@ -3,6 +3,7 @@ import streamlit as st
 import requests
 import json
 import io
+import hashlib
 
 LOGO = "images/clydes-ai.png"
 # Set up the API endpoint
@@ -16,12 +17,22 @@ if not CORRECT_PASSWORD:
 # Initialize session state for authentication
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
+if 'processed_files' not in st.session_state:
+    st.session_state.processed_files = set()
 
 def login():
     st.session_state.authenticated = True
 
 def logout():
     st.session_state.authenticated = False
+    
+def calculate_file_hash(file):
+    """Calculate a hash for the file content."""
+    hasher = hashlib.md5()
+    for chunk in iter(lambda: file.read(4096), b""):
+        hasher.update(chunk)
+    file.seek(0)  # Reset file pointer
+    return hasher.hexdigest()
 
 # Login form
 if not st.session_state.authenticated:
@@ -85,44 +96,56 @@ else:
                   st.error("Failed to get a response from the API.")
 
   elif section == "Upload Documents":
-      st.header("Upload Documents")
+        st.header("Upload Documents")
 
-      # File uploader for multiple files
-      uploaded_files = st.file_uploader("Choose text or PDF files", type=["txt", "pdf"], accept_multiple_files=True)
+        # File uploader for multiple files
+        uploaded_files = st.file_uploader("Choose text or PDF files", type=["txt", "pdf"], accept_multiple_files=True)
 
-      if uploaded_files:
-          # Input fields for index name and namespace
-          index_name = "drclydesai"
-          namespace = ""
+        if uploaded_files:
+            # Input fields for index name and namespace
+            index_name = "drclydesai"
+            namespace = ""
 
-          if st.button("Process Documents"):
-              for uploaded_file in uploaded_files:
-                  # Read file contents
-                  if uploaded_file.type == "text/plain":
-                      document_content = uploaded_file.getvalue().decode("utf-8")
-                  elif uploaded_file.type == "application/pdf":
-                      pdf_reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
-                      document_content = ""
-                      for page in pdf_reader.pages:
-                          document_content += page.extract_text() + "\n"
-                  else:
-                      st.warning(f"Unsupported file type: {uploaded_file.type}")
-                      continue
+            if st.button("Process Documents"):
+                files_to_process = []
+                for uploaded_file in uploaded_files:
+                    file_hash = calculate_file_hash(uploaded_file)
+                    if file_hash not in st.session_state.processed_files:
+                        files_to_process.append((uploaded_file, file_hash))
+                    else:
+                        st.warning(f"File '{uploaded_file.name}' has already been processed. Skipping.")
 
-                  # Prepare the payload for the API
-                  payload = {
-                      "document": document_content,
-                      "indexName": index_name,
-                      "namespace": namespace
-                  }
+                for uploaded_file, file_hash in files_to_process:
+                    # Read file contents
+                    if uploaded_file.type == "text/plain":
+                        document_content = uploaded_file.getvalue().decode("utf-8")
+                    elif uploaded_file.type == "application/pdf":
+                        pdf_reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
+                        document_content = ""
+                        for page in pdf_reader.pages:
+                            document_content += page.extract_text() + "\n"
+                    else:
+                        st.warning(f"Unsupported file type: {uploaded_file.type}")
+                        continue
 
-                  # Make API request
-                  with st.spinner(f"Processing document: {uploaded_file.name}..."):
-                      response = requests.post(f"{API_URL}/add_document", json=payload)
-                      if response.status_code == 200:
-                          st.success(f"Document {uploaded_file.name} processed successfully!")
-                      else:
-                          st.error(f"Failed to process the document: {uploaded_file.name}")
+                    # Prepare the payload for the API
+                    payload = {
+                        "document": document_content,
+                        "indexName": index_name,
+                        "namespace": namespace
+                    }
+
+                    # Make API request
+                    with st.spinner(f"Processing document: {uploaded_file.name}..."):
+                        response = requests.post(f"{API_URL}/add_document", json=payload)
+                        if response.status_code == 200:
+                            st.success(f"Document {uploaded_file.name} processed successfully!")
+                            st.session_state.processed_files.add(file_hash)
+                        else:
+                            st.error(f"Failed to process the document: {uploaded_file.name}")
+
+                # Clear the file uploader
+                # st.rerun()
 
   # Add some information about the app
   st.sidebar.markdown("---")
